@@ -5,5 +5,19 @@
       "src": "api/**/*.ts",
       "use": "@vercel/node"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron-deliver",
+      "schedule": "0 */1 * * *"
+    },
+    {
+      "path": "/api/generate-batch",
+      "schedule": "0 6 * * 1"
+    },
+    {
+      "path": "/api/sync-tiktok-stats",
+      "schedule": "0 23 * * *"
+    }
   ]
 }
