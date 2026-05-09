@@ -1,13 +1,16 @@
 // api/cron-deliver.ts
-// Checks for pieces whose scheduled_for has passed and delivers via Telegram
-// Called by Vercel cron every hour
+// 100% stock images + automatic text overlay via Sharp
+// No AI image generation — zero cost
 //
-// Also handles the "last mile" image production:
-// - For AI images: calls OpenAI API to generate images with text baked in
-// - For stock images: picks from stock bank and overlays text via Sharp
+// Flow:
+// 1. Finds pieces in "generated" status approaching their schedule
+// 2. For each slide: picks a stock image, overlays the slide text using Sharp
+// 3. Uploads final images to Supabase Storage
+// 4. Delivers via Telegram when scheduled_for has passed
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import sharp from 'sharp';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -23,29 +26,13 @@ async function sendTelegramMessage(text: string) {
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      text,
-      parse_mode: 'HTML',
-    }),
-  });
-}
-
-async function sendTelegramPhoto(photoUrl: string, caption?: string) {
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      photo: photoUrl,
-      caption: caption || '',
-    }),
+    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' }),
   });
 }
 
 async function sendTelegramMediaGroup(mediaUrls: string[], caption?: string) {
   const media = mediaUrls.map((url, i) => ({
-    type: 'photo',
+    type: 'photo' as const,
     media: url,
     ...(i === 0 && caption ? { caption } : {}),
   }));
@@ -53,82 +40,24 @@ async function sendTelegramMediaGroup(mediaUrls: string[], caption?: string) {
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      media,
-    }),
+    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, media }),
   });
 }
 
-// ── Generate AI image via OpenAI ────────────────────────────────────────────
+// ── Stock image picker ──────────────────────────────────────────────────────
 
-async function generateAIImage(prompt: string): Promise<string | null> {
-  try {
-    const res = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-image-1',
-        prompt,
-        n: 1,
-        size: '1024x1536', // portrait for TikTok carousel
-        quality: 'low',    // $0.01 per image
-      }),
-    });
-
-    if (!res.ok) {
-      console.error('[cron-deliver] OpenAI error:', await res.text());
-      return null;
-    }
-
-    const data = await res.json();
-    // gpt-image-1 returns b64_json by default
-    const b64 = data.data?.[0]?.b64_json;
-    if (!b64) return data.data?.[0]?.url || null;
-
-    // Upload base64 image to Supabase Storage
-    const buffer = Buffer.from(b64, 'base64');
-    const filename = `slide-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.png`;
-    
-    const { data: upload, error } = await supabase.storage
-      .from('content-images')
-      .upload(filename, buffer, { contentType: 'image/png' });
-
-    if (error) {
-      console.error('[cron-deliver] Storage upload error:', error);
-      return null;
-    }
-
-    // Get public URL
-    const { data: urlData } = supabase.storage
-      .from('content-images')
-      .getPublicUrl(filename);
-
-    return urlData?.publicUrl || null;
-  } catch (e) {
-    console.error('[cron-deliver] OpenAI fetch error:', e);
-    return null;
-  }
-}
-
-// ── Pick stock image from Supabase ──────────────────────────────────────────
-
-async function pickStockImage(direction: string): Promise<string | null> {
-  // Try to match category from direction keywords
+async function pickStockImage(direction: string): Promise<{ id: string; path: string } | null> {
   const categoryMap: Record<string, string[]> = {
-    piano: ['piano', 'grand piano', 'upright', 'keys', 'keyboard'],
-    hands: ['hands', 'fingers', 'touching', 'hovering'],
-    room: ['room', 'empty', 'dark room', 'window', 'light'],
-    sheet_music: ['sheet', 'score', 'partition', 'music stand'],
-    mood_dark: ['shadow', 'dark', 'night', 'dim', 'silhouette'],
-    mood_light: ['morning', 'dawn', 'soft light', 'gentle'],
+    piano: ['piano', 'grand piano', 'upright', 'keys', 'keyboard', 'bench'],
+    hands: ['hands', 'fingers', 'touching', 'hovering', 'playing'],
+    room: ['room', 'empty', 'dark room', 'window', 'light', 'door'],
+    sheet_music: ['sheet', 'score', 'partition', 'music stand', 'pages'],
+    mood_dark: ['shadow', 'dark', 'night', 'dim', 'silhouette', 'fog'],
+    mood_light: ['morning', 'dawn', 'soft light', 'gentle', 'quiet'],
   };
 
-  let bestCategory = 'piano'; // default
-  const dirLower = direction.toLowerCase();
+  let bestCategory = 'piano';
+  const dirLower = (direction || '').toLowerCase();
   for (const [cat, keywords] of Object.entries(categoryMap)) {
     if (keywords.some(kw => dirLower.includes(kw))) {
       bestCategory = cat;
@@ -145,99 +74,203 @@ async function pickStockImage(direction: string): Promise<string | null> {
     .limit(1)
     .single();
 
-  if (!img) {
-    // Fallback: any category, least used
-    const { data: fallback } = await supabase
-      .from('stock_images')
-      .select('id, storage_path')
-      .order('used_count', { ascending: true })
-      .limit(1)
-      .single();
-    
-    if (!fallback) return null;
-    
-    await supabase.from('stock_images').update({ used_count: 1 }).eq('id', fallback.id);
-    return fallback.storage_path;
+  if (img) {
+    await supabase.from('stock_images').update({ used_count: (img as any).used_count + 1 || 1 }).eq('id', img.id);
+    return { id: img.id, path: img.storage_path };
   }
 
-  // Increment used_count
-  await supabase.rpc('increment_used_count', { image_id: img.id }).catch(() => {
-    // Fallback if RPC doesn't exist
-    supabase.from('stock_images').update({ used_count: 1 }).eq('id', img.id);
-  });
+  // Fallback: any image, least used
+  const { data: fallback } = await supabase
+    .from('stock_images')
+    .select('id, storage_path')
+    .order('used_count', { ascending: true })
+    .limit(1)
+    .single();
 
-  return img.storage_path;
+  if (fallback) {
+    await supabase.from('stock_images').update({ used_count: 1 }).eq('id', fallback.id);
+    return { id: fallback.id, path: fallback.storage_path };
+  }
+
+  return null;
 }
 
-// ── Build image prompt with text for OpenAI ─────────────────────────────────
+// ── Text overlay via Sharp ──────────────────────────────────────────────────
 
-function buildImagePrompt(direction: string, slideText: string): string {
-  return `${direction}
+async function overlayTextOnImage(imageBuffer: Buffer, text: string): Promise<Buffer> {
+  // Get image dimensions
+  const metadata = await sharp(imageBuffer).metadata();
+  const width = metadata.width || 1080;
+  const height = metadata.height || 1350;
 
-CRITICAL TEXT REQUIREMENTS:
-- Include this exact text in the image: "${slideText}"
-- Typography: elegant serif font similar to Cormorant Garamond
-- Text placement: upper third of the image, in negative space with high contrast
-- Text must be immediately readable — never at the bottom, never vertical, never obscured
-- The text should feel printed into the atmosphere, not overlaid
+  // Split text into lines (max ~30 chars per line for readability)
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let currentLine = '';
 
-STYLE: monochrome watercolor, black ink wash, grayscale only, cinematic shadows, soft grain, melancholic elegance. No color, no glow, no modern UI.
-ASPECT: portrait 9:16`;
+  for (const word of words) {
+    const test = currentLine ? `${currentLine} ${word}` : word;
+    if (test.length > 28 && currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = test;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+
+  // Calculate font size based on image width
+  const fontSize = Math.round(width * 0.055); // ~60px on 1080w
+  const lineHeight = Math.round(fontSize * 1.5);
+  const textBlockHeight = lines.length * lineHeight;
+
+  // Position: upper third, left-aligned with padding
+  const xPad = Math.round(width * 0.08);
+  const yStart = Math.round(height * 0.15);
+
+  // Build SVG text overlay
+  const svgLines = lines.map((line, i) => {
+    const y = yStart + (i * lineHeight) + fontSize;
+    // Escape special XML characters
+    const escaped = line
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+    return `<text x="${xPad}" y="${y}" font-family="Georgia, 'Times New Roman', serif" font-weight="300" font-size="${fontSize}" fill="rgba(255,255,255,0.92)" letter-spacing="-0.5">${escaped}</text>`;
+  }).join('\n');
+
+  // Semi-transparent background behind text for legibility
+  const bgY = yStart - Math.round(fontSize * 0.3);
+  const bgHeight = textBlockHeight + Math.round(fontSize * 0.8);
+
+  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="${bgY}" width="${width}" height="${bgHeight}" fill="rgba(0,0,0,0.35)" />
+    ${svgLines}
+  </svg>`;
+
+  // Composite SVG over image
+  const result = await sharp(imageBuffer)
+    .composite([{
+      input: Buffer.from(svg),
+      top: 0,
+      left: 0,
+    }])
+    .png()
+    .toBuffer();
+
+  return result;
+}
+
+// ── Download image from Supabase Storage ────────────────────────────────────
+
+async function downloadStockImage(path: string): Promise<Buffer | null> {
+  const { data, error } = await supabase.storage
+    .from('stock-images')
+    .download(path);
+
+  if (error || !data) {
+    console.error('[cron-deliver] Download error:', error);
+    return null;
+  }
+
+  const arrayBuffer = await data.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+// ── Upload final image to Supabase Storage ──────────────────────────────────
+
+async function uploadFinalImage(buffer: Buffer, pieceId: string, slideIndex: number): Promise<string | null> {
+  const filename = `final/${pieceId}/slide-${slideIndex}.png`;
+
+  const { error } = await supabase.storage
+    .from('content-images')
+    .upload(filename, buffer, {
+      contentType: 'image/png',
+      upsert: true,
+    });
+
+  if (error) {
+    console.error('[cron-deliver] Upload error:', error);
+    return null;
+  }
+
+  const { data: urlData } = supabase.storage
+    .from('content-images')
+    .getPublicUrl(filename);
+
+  return urlData?.publicUrl || null;
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Allow both GET (Vercel cron) and POST (manual trigger)
-  
   try {
     const now = new Date().toISOString();
 
-    // 1. Find pieces that need image production (generated → ready)
+    // ── STEP 1: Produce images for upcoming pieces ──
     const { data: needsImages } = await supabase
       .from('content_pieces')
-      .select('id, slide_texts, image_prompts, image_mode')
+      .select('id, slide_texts, image_prompts')
       .eq('status', 'generated')
-      .lte('scheduled_for', new Date(Date.now() + 6 * 3600000).toISOString()) // within next 6 hours
+      .lte('scheduled_for', new Date(Date.now() + 6 * 3600000).toISOString())
       .order('scheduled_for', { ascending: true })
       .limit(1);
 
     if (needsImages && needsImages.length > 0) {
       const piece = needsImages[0];
-      const slides = Array.isArray(piece.slide_texts) ? piece.slide_texts : [];
-      const prompts = Array.isArray(piece.image_prompts) ? piece.image_prompts : [];
+      const slides: string[] = Array.isArray(piece.slide_texts) ? piece.slide_texts : [];
+      const prompts: any[] = Array.isArray(piece.image_prompts) ? piece.image_prompts : [];
       const imageUrls: string[] = [];
+      const stockKeys: string[] = [];
+
+      console.log(`[cron-deliver] Producing images for piece ${piece.id} (${slides.length} slides)`);
 
       for (let i = 0; i < slides.length; i++) {
         const slideText = slides[i] || '';
-        const promptInfo = prompts[i] || {};
-        const mode = promptInfo.mode || (i % 2 === 0 ? 'stock' : 'ai');
-        const direction = promptInfo.direction || 'dark moody piano scene';
+        const direction = prompts[i]?.direction || 'dark moody piano';
 
-        if (mode === 'ai') {
-          const fullPrompt = buildImagePrompt(direction, slideText);
-          const url = await generateAIImage(fullPrompt);
-          imageUrls.push(url || '');
-        } else {
-          // Stock image — for now just store the path, overlay happens at delivery
-          const stockPath = await pickStockImage(direction);
-          imageUrls.push(stockPath || '');
+        // Pick stock image
+        const stock = await pickStockImage(direction);
+        if (!stock) {
+          console.error(`[cron-deliver] No stock image found for slide ${i}`);
+          imageUrls.push('');
+          continue;
         }
+
+        stockKeys.push(stock.path);
+
+        // Download stock image
+        const imageBuffer = await downloadStockImage(stock.path);
+        if (!imageBuffer) {
+          imageUrls.push('');
+          continue;
+        }
+
+        // Overlay text
+        const finalBuffer = await overlayTextOnImage(imageBuffer, slideText);
+
+        // Upload final image
+        const url = await uploadFinalImage(finalBuffer, piece.id, i);
+        imageUrls.push(url || '');
       }
 
-      // Update piece with image URLs and mark as ready
+      // Update piece
       await supabase
         .from('content_pieces')
         .update({
           final_image_urls: imageUrls,
+          stock_image_keys: stockKeys,
+          image_mode: 'stock',
           status: 'ready',
         })
         .eq('id', piece.id);
 
-      console.log(`[cron-deliver] Produced images for piece ${piece.id}`);
+      console.log(`[cron-deliver] Piece ${piece.id} ready with ${imageUrls.filter(u => u).length} images`);
     }
 
-    // 2. Find pieces ready to deliver (scheduled_for has passed)
+    // ── STEP 2: Deliver ready pieces whose time has come ──
     const { data: toDeliver } = await supabase
       .from('content_pieces')
       .select('id, slide_texts, caption, hashtags, final_image_urls, scheduled_for')
@@ -251,45 +284,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const piece = toDeliver[0];
-    const slides = Array.isArray(piece.slide_texts) ? piece.slide_texts : [];
-    const imageUrls = Array.isArray(piece.final_image_urls) ? piece.final_image_urls : [];
+    const slides: string[] = Array.isArray(piece.slide_texts) ? piece.slide_texts : [];
+    const imageUrls: string[] = Array.isArray(piece.final_image_urls) ? piece.final_image_urls : [];
     const hashtags = Array.isArray(piece.hashtags) ? piece.hashtags.join(' ') : '';
     const caption = `${piece.caption || ''} ${hashtags}`.trim();
 
-    // Build Telegram message
-    let message = `🎹 <b>CAROUSEL READY TO POST</b>\n\n`;
-    message += `<b>Caption:</b> ${caption}\n\n`;
-    message += `<b>Slides:</b>\n`;
+    // Send text summary
+    let message = `🎹 <b>POST READY</b>\n\n`;
+    message += `<b>Caption:</b>\n${caption}\n\n`;
     slides.forEach((s: string, i: number) => {
-      message += `${i + 1}. ${s}\n`;
+      message += `<b>${i + 1}.</b> ${s}\n`;
     });
 
-    // Send notification
     await sendTelegramMessage(message);
 
-    // Send images that have valid URLs (AI-generated ones)
+    // Send images as media group
     const validUrls = imageUrls.filter(u => u && u.startsWith('http'));
-    if (validUrls.length > 0) {
-      if (validUrls.length === 1) {
-        await sendTelegramPhoto(validUrls[0]);
-      } else {
-        // Send in batches of max 10 (Telegram limit)
-        for (let i = 0; i < validUrls.length; i += 10) {
-          const batch = validUrls.slice(i, i + 10);
-          await sendTelegramMediaGroup(batch);
-        }
-      }
-    }
-
-    // For stock images (paths, not URLs), note them in the message
-    const stockSlides = imageUrls
-      .map((u, i) => (!u || !u.startsWith('http')) ? i + 1 : null)
-      .filter(Boolean);
-    
-    if (stockSlides.length > 0) {
-      await sendTelegramMessage(
-        `📷 Slides ${stockSlides.join(', ')} use stock images. Add text overlay manually when posting on TikTok, or use the stock images from your bank.`
-      );
+    if (validUrls.length > 1) {
+      await sendTelegramMediaGroup(validUrls, caption);
+    } else if (validUrls.length === 1) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, photo: validUrls[0], caption }),
+      });
     }
 
     // Update status
@@ -298,7 +316,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .update({ status: 'delivered' })
       .eq('id', piece.id);
 
-    return res.status(200).json({ ok: true, delivered: piece.id });
+    return res.status(200).json({ ok: true, delivered: piece.id, images: validUrls.length });
 
   } catch (err: any) {
     console.error('[cron-deliver] Error:', err);
