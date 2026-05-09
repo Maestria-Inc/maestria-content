@@ -192,8 +192,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const carousels = allCarousels.slice(0, batchSize);
 
     // Store each piece with auto-scheduling
-    // 3 posts per day, at 9:00, 14:00, 19:00 UTC (adjust for your audience)
-    const POST_HOURS_UTC = [9, 14, 19]; // ~5AM, 10AM, 3PM US Eastern
+    // 3 posts per day, at 13:00, 18:00, 23:00 UTC
+    // = 10h, 15h, 20h Guyane = 9AM, 2PM, 7PM US Eastern
+    const POST_HOURS_UTC = [13, 18, 23];
     const pieces = [];
 
     // Start scheduling from tomorrow
