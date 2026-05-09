@@ -46,7 +46,7 @@ async function sendTelegramMediaGroup(mediaUrls: string[], caption?: string) {
 
 // ── Stock image picker ──────────────────────────────────────────────────────
 
-async function pickStockImage(direction: string): Promise<{ id: string; path: string } | null> {
+async function pickStockImage(direction: string, preferredTone?: string, excludeIds?: string[]): Promise<{ id: string; path: string; tone: string } | null> {
   const categoryMap: Record<string, string[]> = {
     piano: ['piano', 'grand piano', 'upright', 'keys', 'keyboard', 'bench'],
     hands: ['hands', 'fingers', 'touching', 'hovering', 'playing'],
@@ -65,31 +65,64 @@ async function pickStockImage(direction: string): Promise<{ id: string; path: st
     }
   }
 
-  // Pick least-used image in that category
-  const { data: img } = await supabase
+  // Build query — prefer same tone for visual cohesion
+  let query = supabase
     .from('stock_images')
-    .select('id, storage_path')
-    .eq('category', bestCategory)
-    .order('used_count', { ascending: true })
-    .limit(1)
-    .single();
+    .select('id, storage_path, tone, used_count')
+    .order('used_count', { ascending: true });
 
-  if (img) {
-    await supabase.from('stock_images').update({ used_count: (img as any).used_count + 1 || 1 }).eq('id', img.id);
-    return { id: img.id, path: img.storage_path };
+  // Filter by tone if specified (ensures all slides in a carousel look cohesive)
+  if (preferredTone) {
+    query = query.eq('tone', preferredTone);
   }
 
-  // Fallback: any image, least used
-  const { data: fallback } = await supabase
+  // Exclude already-used images in this carousel
+  if (excludeIds && excludeIds.length > 0) {
+    query = query.not('id', 'in', `(${excludeIds.join(',')})`);
+  }
+
+  // Try with category first
+  const { data: catMatch } = await query
+    .eq('category', bestCategory)
+    .limit(1)
+    .single();
+
+  if (catMatch) {
+    await supabase.from('stock_images').update({ used_count: (catMatch.used_count || 0) + 1 }).eq('id', catMatch.id);
+    return { id: catMatch.id, path: catMatch.storage_path, tone: catMatch.tone || 'neutral' };
+  }
+
+  // Fallback: same tone, any category
+  let fallbackQuery = supabase
     .from('stock_images')
-    .select('id, storage_path')
+    .select('id, storage_path, tone, used_count')
+    .order('used_count', { ascending: true });
+
+  if (preferredTone) {
+    fallbackQuery = fallbackQuery.eq('tone', preferredTone);
+  }
+  if (excludeIds && excludeIds.length > 0) {
+    fallbackQuery = fallbackQuery.not('id', 'in', `(${excludeIds.join(',')})`);
+  }
+
+  const { data: toneFallback } = await fallbackQuery.limit(1).single();
+
+  if (toneFallback) {
+    await supabase.from('stock_images').update({ used_count: (toneFallback.used_count || 0) + 1 }).eq('id', toneFallback.id);
+    return { id: toneFallback.id, path: toneFallback.storage_path, tone: toneFallback.tone || 'neutral' };
+  }
+
+  // Last resort: anything
+  const { data: anyImg } = await supabase
+    .from('stock_images')
+    .select('id, storage_path, tone, used_count')
     .order('used_count', { ascending: true })
     .limit(1)
     .single();
 
-  if (fallback) {
-    await supabase.from('stock_images').update({ used_count: 1 }).eq('id', fallback.id);
-    return { id: fallback.id, path: fallback.storage_path };
+  if (anyImg) {
+    await supabase.from('stock_images').update({ used_count: (anyImg.used_count || 0) + 1 }).eq('id', anyImg.id);
+    return { id: anyImg.id, path: anyImg.storage_path, tone: anyImg.tone || 'neutral' };
   }
 
   return null;
@@ -227,18 +260,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       console.log(`[cron-deliver] Producing images for piece ${piece.id} (${slides.length} slides)`);
 
+      // First pass: pick the tone from the first slide's image, then use same tone for all
+      let carouselTone: string | undefined;
+      const usedImageIds: string[] = [];
+
       for (let i = 0; i < slides.length; i++) {
         const slideText = slides[i] || '';
         const direction = prompts[i]?.direction || 'dark moody piano';
 
-        // Pick stock image
-        const stock = await pickStockImage(direction);
+        // Pick stock image — same tone as first slide, exclude already used
+        const stock = await pickStockImage(direction, carouselTone, usedImageIds);
         if (!stock) {
           console.error(`[cron-deliver] No stock image found for slide ${i}`);
           imageUrls.push('');
           continue;
         }
 
+        // Lock the tone from the first image for the rest of the carousel
+        if (i === 0) {
+          carouselTone = stock.tone;
+        }
+
+        usedImageIds.push(stock.id);
         stockKeys.push(stock.path);
 
         // Download stock image
