@@ -1,21 +1,15 @@
 // api/cron-deliver.ts
-// 100% stock images + automatic text overlay via Sharp
-// No AI image generation — zero cost
+// Picks stock images for each slide and delivers via Telegram
+// Text overlay is done manually in TikTok when posting
 //
 // Flow:
 // 1. Finds pieces in "generated" status approaching their schedule
-// 2. For each slide: picks a stock image, overlays the slide text using Sharp
-// 3. Uploads final images to Supabase Storage
-// 4. Delivers via Telegram when scheduled_for has passed
+// 2. For each slide: picks a tone-cohesive stock image
+// 3. Sends images + slide texts via Telegram
+// 4. Updates status
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import sharp from 'sharp';
-import path from 'path';
-
-// Point fontconfig to our custom fonts directory
-process.env.FONTCONFIG_PATH = path.join(process.cwd(), 'fonts');
-process.env.FONTCONFIG_FILE = path.join(process.cwd(), 'fonts', 'fonts.conf');
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -49,9 +43,9 @@ async function sendTelegramMediaGroup(mediaUrls: string[], caption?: string) {
   });
 }
 
-// ── Stock image picker ──────────────────────────────────────────────────────
+// ── Stock image picker (tone-cohesive) ──────────────────────────────────────
 
-async function pickStockImage(direction: string, preferredTone?: string, excludeIds?: string[]): Promise<{ id: string; path: string; tone: string } | null> {
+async function pickStockImage(direction: string, preferredTone?: string, excludeIds?: string[]): Promise<{ id: string; url: string; tone: string } | null> {
   const categoryMap: Record<string, string[]> = {
     piano: ['piano', 'grand piano', 'upright', 'keys', 'keyboard', 'bench'],
     hands: ['hands', 'fingers', 'touching', 'hovering', 'playing'],
@@ -70,178 +64,45 @@ async function pickStockImage(direction: string, preferredTone?: string, exclude
     }
   }
 
-  // Build query — prefer same tone for visual cohesion
-  let query = supabase
-    .from('stock_images')
-    .select('id, storage_path, tone, used_count')
-    .order('used_count', { ascending: true });
+  // Try: same tone + same category
+  const attempts = [
+    { tone: preferredTone, category: bestCategory },
+    { tone: preferredTone, category: undefined },
+    { tone: undefined, category: bestCategory },
+    { tone: undefined, category: undefined },
+  ];
 
-  // Filter by tone if specified (ensures all slides in a carousel look cohesive)
-  if (preferredTone) {
-    query = query.eq('tone', preferredTone);
-  }
+  for (const attempt of attempts) {
+    let query = supabase
+      .from('stock_images')
+      .select('id, storage_path, tone, used_count')
+      .order('used_count', { ascending: true });
 
-  // Exclude already-used images in this carousel
-  if (excludeIds && excludeIds.length > 0) {
-    query = query.not('id', 'in', `(${excludeIds.join(',')})`);
-  }
+    if (attempt.tone) query = query.eq('tone', attempt.tone);
+    if (attempt.category) query = query.eq('category', attempt.category);
+    if (excludeIds && excludeIds.length > 0) {
+      query = query.not('id', 'in', `(${excludeIds.join(',')})`);
+    }
 
-  // Try with category first
-  const { data: catMatch } = await query
-    .eq('category', bestCategory)
-    .limit(1)
-    .single();
+    const { data: img } = await query.limit(1).single();
 
-  if (catMatch) {
-    await supabase.from('stock_images').update({ used_count: (catMatch.used_count || 0) + 1 }).eq('id', catMatch.id);
-    return { id: catMatch.id, path: catMatch.storage_path, tone: catMatch.tone || 'neutral' };
-  }
+    if (img) {
+      await supabase.from('stock_images').update({ used_count: (img.used_count || 0) + 1 }).eq('id', img.id);
+      
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from('stock-images')
+        .getPublicUrl(img.storage_path);
 
-  // Fallback: same tone, any category
-  let fallbackQuery = supabase
-    .from('stock_images')
-    .select('id, storage_path, tone, used_count')
-    .order('used_count', { ascending: true });
-
-  if (preferredTone) {
-    fallbackQuery = fallbackQuery.eq('tone', preferredTone);
-  }
-  if (excludeIds && excludeIds.length > 0) {
-    fallbackQuery = fallbackQuery.not('id', 'in', `(${excludeIds.join(',')})`);
-  }
-
-  const { data: toneFallback } = await fallbackQuery.limit(1).single();
-
-  if (toneFallback) {
-    await supabase.from('stock_images').update({ used_count: (toneFallback.used_count || 0) + 1 }).eq('id', toneFallback.id);
-    return { id: toneFallback.id, path: toneFallback.storage_path, tone: toneFallback.tone || 'neutral' };
-  }
-
-  // Last resort: anything
-  const { data: anyImg } = await supabase
-    .from('stock_images')
-    .select('id, storage_path, tone, used_count')
-    .order('used_count', { ascending: true })
-    .limit(1)
-    .single();
-
-  if (anyImg) {
-    await supabase.from('stock_images').update({ used_count: (anyImg.used_count || 0) + 1 }).eq('id', anyImg.id);
-    return { id: anyImg.id, path: anyImg.storage_path, tone: anyImg.tone || 'neutral' };
+      return {
+        id: img.id,
+        url: urlData?.publicUrl || '',
+        tone: img.tone || 'neutral',
+      };
+    }
   }
 
   return null;
-}
-
-// ── Text overlay via Sharp ──────────────────────────────────────────────────
-
-async function overlayTextOnImage(imageBuffer: Buffer, text: string): Promise<Buffer> {
-  // Get image dimensions
-  const metadata = await sharp(imageBuffer).metadata();
-  const width = metadata.width || 1080;
-  const height = metadata.height || 1350;
-
-  // Split text into lines (max ~30 chars per line for readability)
-  const words = text.split(' ');
-  const lines: string[] = [];
-  let currentLine = '';
-
-  for (const word of words) {
-    const test = currentLine ? `${currentLine} ${word}` : word;
-    if (test.length > 28 && currentLine) {
-      lines.push(currentLine);
-      currentLine = word;
-    } else {
-      currentLine = test;
-    }
-  }
-  if (currentLine) lines.push(currentLine);
-
-  // Calculate font size based on image width
-  const fontSize = Math.round(width * 0.055); // ~60px on 1080w
-  const lineHeight = Math.round(fontSize * 1.5);
-  const textBlockHeight = lines.length * lineHeight;
-
-  // Position: upper third, left-aligned with padding
-  const xPad = Math.round(width * 0.08);
-  const yStart = Math.round(height * 0.15);
-
-  // Build SVG text overlay
-  const svgLines = lines.map((line, i) => {
-    const y = yStart + (i * lineHeight) + fontSize;
-    const escaped = line
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&apos;');
-    return `<text x="${xPad}" y="${y}" font-family="'Cormorant Garamond', Georgia, serif" font-weight="300" font-size="${fontSize}" fill="rgba(255,255,255,0.92)" letter-spacing="-0.5">${escaped}</text>`;
-  }).join('\n');
-
-  const bgY = yStart - Math.round(fontSize * 0.3);
-  const bgHeight = textBlockHeight + Math.round(fontSize * 0.8);
-
-  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <style>
-        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300&amp;display=swap');
-      </style>
-    </defs>
-    <rect x="0" y="${bgY}" width="${width}" height="${bgHeight}" fill="rgba(0,0,0,0.4)" />
-    ${svgLines}
-  </svg>`;
-
-  // Composite SVG over image
-  const result = await sharp(imageBuffer)
-    .composite([{
-      input: Buffer.from(svg),
-      top: 0,
-      left: 0,
-    }])
-    .png()
-    .toBuffer();
-
-  return result;
-}
-
-// ── Download image from Supabase Storage ────────────────────────────────────
-
-async function downloadStockImage(path: string): Promise<Buffer | null> {
-  const { data, error } = await supabase.storage
-    .from('stock-images')
-    .download(path);
-
-  if (error || !data) {
-    console.error('[cron-deliver] Download error:', error);
-    return null;
-  }
-
-  const arrayBuffer = await data.arrayBuffer();
-  return Buffer.from(arrayBuffer);
-}
-
-// ── Upload final image to Supabase Storage ──────────────────────────────────
-
-async function uploadFinalImage(buffer: Buffer, pieceId: string, slideIndex: number): Promise<string | null> {
-  const filename = `final/${pieceId}/slide-${slideIndex}.png`;
-
-  const { error } = await supabase.storage
-    .from('content-images')
-    .upload(filename, buffer, {
-      contentType: 'image/png',
-      upsert: true,
-    });
-
-  if (error) {
-    console.error('[cron-deliver] Upload error:', error);
-    return null;
-  }
-
-  const { data: urlData } = supabase.storage
-    .from('content-images')
-    .getPublicUrl(filename);
-
-  return urlData?.publicUrl || null;
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -250,7 +111,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const now = new Date().toISOString();
 
-    // ── STEP 1: Produce images for upcoming pieces ──
+    // ── STEP 1: Produce image selections for upcoming pieces ──
     const { data: needsImages } = await supabase
       .from('content_pieces')
       .select('id, slide_texts, image_prompts')
@@ -265,49 +126,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const prompts: any[] = Array.isArray(piece.image_prompts) ? piece.image_prompts : [];
       const imageUrls: string[] = [];
       const stockKeys: string[] = [];
-
-      console.log(`[cron-deliver] Producing images for piece ${piece.id} (${slides.length} slides)`);
-
-      // First pass: pick the tone from the first slide's image, then use same tone for all
       let carouselTone: string | undefined;
       const usedImageIds: string[] = [];
 
       for (let i = 0; i < slides.length; i++) {
-        const slideText = slides[i] || '';
         const direction = prompts[i]?.direction || 'dark moody piano';
-
-        // Pick stock image — same tone as first slide, exclude already used
         const stock = await pickStockImage(direction, carouselTone, usedImageIds);
+
         if (!stock) {
-          console.error(`[cron-deliver] No stock image found for slide ${i}`);
           imageUrls.push('');
           continue;
         }
 
-        // Lock the tone from the first image for the rest of the carousel
-        if (i === 0) {
-          carouselTone = stock.tone;
-        }
-
+        if (i === 0) carouselTone = stock.tone;
         usedImageIds.push(stock.id);
-        stockKeys.push(stock.path);
-
-        // Download stock image
-        const imageBuffer = await downloadStockImage(stock.path);
-        if (!imageBuffer) {
-          imageUrls.push('');
-          continue;
-        }
-
-        // Overlay text
-        const finalBuffer = await overlayTextOnImage(imageBuffer, slideText);
-
-        // Upload final image
-        const url = await uploadFinalImage(finalBuffer, piece.id, i);
-        imageUrls.push(url || '');
+        stockKeys.push(stock.id);
+        imageUrls.push(stock.url);
       }
 
-      // Update piece
       await supabase
         .from('content_pieces')
         .update({
@@ -317,8 +153,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           status: 'ready',
         })
         .eq('id', piece.id);
-
-      console.log(`[cron-deliver] Piece ${piece.id} ready with ${imageUrls.filter(u => u).length} images`);
     }
 
     // ── STEP 2: Deliver ready pieces whose time has come ──
@@ -340,24 +174,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const hashtags = Array.isArray(piece.hashtags) ? piece.hashtags.join(' ') : '';
     const caption = `${piece.caption || ''} ${hashtags}`.trim();
 
-    // Send text summary
+    // Send slide texts with numbering
     let message = `🎹 <b>POST READY</b>\n\n`;
     message += `<b>Caption:</b>\n${caption}\n\n`;
     slides.forEach((s: string, i: number) => {
-      message += `<b>${i + 1}.</b> ${s}\n`;
+      message += `<b>Slide ${i + 1}:</b> ${s}\n\n`;
     });
+    message += `📷 Images below — add text in TikTok`;
 
     await sendTelegramMessage(message);
 
-    // Send images as media group
+    // Send images
     const validUrls = imageUrls.filter(u => u && u.startsWith('http'));
     if (validUrls.length > 1) {
-      await sendTelegramMediaGroup(validUrls, caption);
+      await sendTelegramMediaGroup(validUrls);
     } else if (validUrls.length === 1) {
       await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, photo: validUrls[0], caption }),
+        body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, photo: validUrls[0] }),
       });
     }
 
