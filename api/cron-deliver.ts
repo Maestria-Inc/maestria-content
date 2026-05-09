@@ -11,6 +11,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
+import path from 'path';
+
+// Point fontconfig to our custom fonts directory
+process.env.FONTCONFIG_PATH = path.join(process.cwd(), 'fonts');
+process.env.FONTCONFIG_FILE = path.join(process.cwd(), 'fonts', 'fonts.conf');
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -164,22 +169,25 @@ async function overlayTextOnImage(imageBuffer: Buffer, text: string): Promise<Bu
   // Build SVG text overlay
   const svgLines = lines.map((line, i) => {
     const y = yStart + (i * lineHeight) + fontSize;
-    // Escape special XML characters
     const escaped = line
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&apos;');
-    return `<text x="${xPad}" y="${y}" font-family="Georgia, 'Times New Roman', serif" font-weight="300" font-size="${fontSize}" fill="rgba(255,255,255,0.92)" letter-spacing="-0.5">${escaped}</text>`;
+    return `<text x="${xPad}" y="${y}" font-family="'Cormorant Garamond', Georgia, serif" font-weight="300" font-size="${fontSize}" fill="rgba(255,255,255,0.92)" letter-spacing="-0.5">${escaped}</text>`;
   }).join('\n');
 
-  // Semi-transparent background behind text for legibility
   const bgY = yStart - Math.round(fontSize * 0.3);
   const bgHeight = textBlockHeight + Math.round(fontSize * 0.8);
 
   const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-    <rect x="0" y="${bgY}" width="${width}" height="${bgHeight}" fill="rgba(0,0,0,0.35)" />
+    <defs>
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300&amp;display=swap');
+      </style>
+    </defs>
+    <rect x="0" y="${bgY}" width="${width}" height="${bgHeight}" fill="rgba(0,0,0,0.4)" />
     ${svgLines}
   </svg>`;
 
