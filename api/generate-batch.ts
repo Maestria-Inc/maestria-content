@@ -47,20 +47,40 @@ Avoid these for conversion-focused content.
 
 ═══ FORMAT RULES ═══
 - Exactly 6 slides per carousel
-- Slide 1: Hook — must stop the scroll. One short sentence about a pain they feel TONIGHT.
-- Slides 2-3: Escalate the pain. Make them feel seen. Be specific and physical (sitting at the bench, opening the lid, playing the intro then stopping).
-- Slide 4: The pivot. Short. One line. A question or a shift.
-- Slide 5: The resolution. What Maestria does — but framed as what THEY get, not what the product is. Never say "AI", "generate", "tool", "app". Say "a piece", "composed for you", "written for tonight".
-- Slide 6: "Link in bio." — nothing else. These three words only.
 
-═══ STYLE RULES ═══  
+- Slide 1: Hook. MAX 12 WORDS. One gut-punch sentence. The person must feel called out in under 2 seconds.
+  GOOD: "You start playing… And 2 minutes later, you're bored."
+  GOOD: "Ever sat at your piano… And had nothing to play?"
+  BAD: "You sat down tonight and played the intro to the same piece for the third time this week." (too long, too narrative)
+
+- Slides 2-3: Escalate. MAX 12 WORDS EACH. Stay punchy. One thought per slide.
+  GOOD: "So you go back to what's safe… The same 3 songs."
+  GOOD: "So you switch songs. Again. And again."
+  BAD: "Not because you love it that much. Because nothing else had a reason to be next." (too wordy, too clever)
+
+- Slide 4: The pivot. MAX 10 WORDS. A question or a shift. This slide is short on purpose.
+  GOOD: "What if tonight was different?"
+  GOOD: "Let's give you a reason to care."
+  BAD: "What if the piece already knew it was for tonight?" (too abstract, too poetic)
+
+- Slide 5: The resolution. MAX 15 WORDS. What THEY get. Not a product description. Not a pitch. Not a feature list. NEVER mention "Maestria" by name — it looks like an ad and they stop reading.
+  GOOD: "A piece composed for tonight. The audio. The sheet music. Yours."
+  GOOD: "One mood. One piece. Yours within the hour."
+  BAD: "Maestria composes one piece for the mood you choose — with a story, a soul, a reason to exist for you specifically. Sheet music included. Ready within the hour." (this is a paragraph, not a slide)
+
+- Slide 6: "Link in bio." — ONLY these three words. Nothing else. Ever.
+
+═══ STYLE RULES ═══
+- HARD LIMIT: No slide exceeds 15 words. Most slides should be 8-12 words.
 - Max 2 lines of text per slide. Never 3.
 - Conversational, direct. Like talking to a friend at 11pm.
 - No exclamation marks. No emojis. No hashtags in slide text.
-- Use ellipsis (...) for pauses between thoughts, but sparingly.
-- Second person only ("you", never "we" or "I" except in pivot)
-- Never mention the price on slides. The page does that.
-- The word "Maestria" appears at most once per carousel, and only on slide 5 if at all.
+- Use ellipsis (...) sparingly — max once per carousel.
+- Second person only ("you", never "we" or "I")
+- NEVER mention "Maestria" anywhere in the slides. The brand is invisible. The page does the selling.
+- Never mention the price.
+- Never list features. Never use dashes or bullet points in slide text.
+- If a slide sounds like ad copy, rewrite it. If it sounds like a friend texting you at midnight, keep it.
 
 ═══ IMAGE DIRECTION PER SLIDE ═══
 For each carousel, also provide image direction — a brief description of what the image should show/feel like. This will be used either to generate an AI image or to select a matching stock photo.
