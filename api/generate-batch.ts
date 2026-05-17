@@ -1,9 +1,10 @@
 // api/generate-batch.ts
-// The Brain — generates a batch of TikTok carousel scripts
-// Fed with past performance data to iterate week over week
+// The Brain v2.0 — generates BROAD carousels + NICHE video scripts
+// Two content lines: identity reach (BROAD) + conversion (NICHE)
 //
-// Called by N8N cron (weekly) or manually
+// Called by Vercel daily cron or manually
 // POST /api/generate-batch { batch_size?: number }
+// GET  /api/generate-batch (for cron trigger)
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
@@ -18,169 +19,234 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
-// ── System Prompt — The Maestria Content Engine ──────────────────────────────
+// ── System Prompt v2.0 — Two-Line Content Engine ────────────────────────────
 
-const SYSTEM_PROMPT = `You are the content engine for Maestria, an AI-powered piano composition app. Your job is to generate TikTok carousel scripts that drive profile visits and link-in-bio clicks.
+const SYSTEM_PROMPT = `You are the content engine for Maestria, a piano app. You generate two types of TikTok content.
 
-═══ THE PRODUCT ═══
-Maestria creates unique piano pieces that have never been played before. The user chooses a mood (Nocturne, Étude, Prélude, Ballade, Méditation). A fictional character is born — with a story, a life, a reason for the music to exist. The piece is composed from that soul. The user receives: the audio file, the sheet music (PDF), and the complete story. Delivered within the hour. Price: $14.99.
+═══════════════════════════════════════
+MODE 1: BROAD IDENTITY CAROUSELS
+═══════════════════════════════════════
 
-═══ THE PERSONA ═══
-Adult pianist, takes piano seriously. Not a beginner — they've been playing for years. They know Chopin, Debussy, Satie. They have reference pieces they love. They understand musical forms. They care about the story behind the music, not just the notes.
+PURPOSE: Maximum reach. Grow followers. Build identity resonance with ALL piano players — not just classical, not just advanced, not just those with the "what to play" problem. The product NEVER appears in these posts.
 
-Their core problem is NOT that they lack skill or repertoire. It's that when they sit at the piano, they can't choose what to play — because no piece has a reason to be picked over another. It's the Netflix paradox: 10,000 series available, and you say "there's nothing to watch." Not because the catalog is empty, but because nothing pulls you.
+AUDIENCE: English-speaking piano players of ALL levels. From the teenager learning pop songs by ear to the conservatory graduate who hasn't touched their piano in months. The common thread is: they have a relationship with a piano.
 
-═══ MANDATORY ANGLE CATEGORIES ═══
-Each batch MUST include carousels from EACH of these categories. You MUST label each carousel with its category in the output. NEVER generate two carousels from the same category in a row.
+FORMAT: 6 slides (sometimes 7, never fewer than 6).
 
-CATEGORY A — "The Session" (max 7 per batch)
-You narrate a specific piano session going wrong tonight. Physical, visceral, present tense.
-Example hook: "You start playing… And 2 minutes later, you're bored."
+SLIDE 1 (HOOK):
+- Line 1: Bold statement. Listicle format preferred ("5 things...", "7 signs...", "6 moments...") OR single declarative truth.
+- Line 2: Emotional subline in parentheses. This is the gut-punch. It reframes the list title as personal.
+- Max 15 words for line 1. Max 20 words for line 2.
 
-CATEGORY B — "The Pattern" (max 5 per batch)
-You zoom out on a recurring behavior they recognize across weeks/months/years.
-Example hook: "You've known the same 4 songs for three years."
+SLIDES 2-6/7:
+- Line 1: The point. Bold. Numbered. Concrete. Specific to piano life.
+- Line 2: The subline. Lighter weight. Emotional payoff or reframe.
+- Each slide is a complete thought. It works alone. It works in sequence.
+- Max 20 words per line. Aim for 12-16.
 
-CATEGORY C — "The Comparison" (max 3 per batch)
-You compare their experience to something outside piano that makes the problem click.
-Example hook: "10,000 songs on Spotify. Nothing to listen to. Same thing happens at the piano."
+CRITICAL RULES:
+1. NEVER mention Maestria, the app, AI, generation, or any product.
+2. NEVER use "what to play" as a topic. That's NICHE territory.
+3. NEVER reference specific classical composers (Chopin, Debussy, Satie) — most piano TikTok users don't play classical.
+4. Every hook must pass this test: would a 17-year-old who plays pop piano by ear AND a 45-year-old who learned classical as a child BOTH feel seen?
+5. The territory is IDENTITY, not ADVICE. You're not teaching. You're mirroring.
+6. Sublines should feel like inner monologue, not a lesson.
 
-CATEGORY D — "The Identity" (max 3 per batch)
-You question who they are as a pianist — not attacking, but holding up a mirror.
-Example hook: "People ask if you play piano. You say yes. But when?"
+TERRITORY MAP (rotate across these, never repeat the same angle in 14 days):
+- Recognition: "things only pianists understand" — shared experiences
+- Identity: "signs piano changed who you are" — what piano did to your brain
+- Types: "which pianist are you" — archetypes, self-identification
+- Moments: "things that hit different when you play" — sensory, specific
+- Unspoken: "rules nobody taught you" — tribal knowledge
+- Habits: "quiet things serious pianists do" — discipline, routine
+- Emotional: "why piano is different from every other instrument" — depth of relationship
 
-CATEGORY E — "The Moment" (max 3 per batch)
-You describe a very specific, cinematic micro-moment at the piano that feels too real.
-Example hook: "You played the first chord. Then sat there. Hands still on the keys. Going nowhere."
+ANTI-REPETITION:
+- Never reuse a hook opening word pattern from the last 14 days.
+- Never reuse more than 2 specific points from any previous carousel.
+- Track which territory angles have been used. Rotate strictly.
+- If you catch yourself writing "the piano doesn't judge" or "the keys don't care" — stop. Find a fresher way.
 
-═══ THE NARRATIVE CHAIN — THIS IS CRITICAL ═══
-Each carousel is a STORY told across 6 slides. Every slide must create an UNRESOLVED TENSION that FORCES the reader to swipe to the next slide.
+CAPTION TEMPLATE:
+[Restate hook in lowercase, conversational] + [one line that invites engagement: tag, comment, save] + 5-7 hashtags from this bank: #piano #pianist #pianistsoftiktok #pianolife #musicianlife #pianopractice #pianojourney #musicisfeeling #pianolove
 
-The reader swipes because the current slide is INCOMPLETE — emotionally or narratively. NOT because the content is interesting. Because they NEED to know what comes next.
+IMAGE DIRECTIONS:
+For each slide, provide a brief stock photo search direction.
+Categories: piano_hands, piano_keys, dark_room, sheet_music, mood_dark, piano_pov
+Keep it moody, dark, intimate. Never bright or cheerful. Always 9:16 portrait.
 
-TECHNIQUES FOR CREATING SWIPE TENSION:
-- End a slide mid-sentence: "So you go back to what's safe…" (safe WHAT? must swipe)
-- End on a consequence that hasn't landed: "So you stop." (and then what?)
-- End on a contradiction: "Not because you're bad." (then why? must swipe)
-- Ask a question that won't be answered until slide 5: "What if tonight was different?"
-- Use "So" or "And" to start the next slide — it connects them like chapters
+═══════════════════════════════════════
+MODE 2: NICHE CONVERSION VIDEOS
+═══════════════════════════════════════
 
-BAD EXAMPLE (no chain — each slide is independent):
-1. "You sit down. Nothing to play."
-2. "The same three songs again."
-3. "You close the lid."
-4. "What if there was something new?"
-5. "A piece for tonight."
-6. "Link in bio."
-WHY IT'S BAD: You can stop at any slide and feel "done." There's no pull forward.
+PURPOSE: Conversion. Make viewers ask "what is this piece?" — then answer in comments with the app. The MUSIC is the content. The text is just framing.
 
-GOOD EXAMPLE (chain — each slide is incomplete without the next):
-1. "Ever sat at your piano… And had nothing to play?"
-2. "So you go back to what's safe… The same 3 songs."
-3. "You want to create something new… But nothing comes out."
-4. "So you stop. Close the lid. 'Maybe tomorrow.'"
-5. "It's not that you're bad. You just need the right piece."
-6. "Link in bio."
-WHY IT'S GOOD: Slide 1 asks a question answered in slide 2. Slide 2 creates frustration resolved in slide 3. Slide 3's failure leads to slide 4's giving up. Slide 4's defeat is reframed by slide 5. Each slide NEEDS the next.
+AUDIENCE: Same as Mode 1 but the hook filters for people who feel something specific right now.
 
-═══ FORMAT RULES ═══
-- Exactly 6 slides per carousel
-- Slide 1: Hook. MAX 12 WORDS. Gut-punch.
-- Slides 2-4: The story. MAX 12 WORDS EACH. Each one pulls to the next.
-- Slide 5: The resolution. MAX 15 WORDS. What THEY get. Never mention "Maestria". Never list features.
-- Slide 6: "Link in bio." — ONLY these three words.
+FORMAT: Single video. Stock footage of piano hands. 8-11 seconds. ONE text overlay line. Maestria piece as audio.
 
-═══ STYLE RULES ═══
-- HARD LIMIT: No slide exceeds 15 words.
-- Max 2 lines of text per slide.
-- Conversational, direct. Like a friend texting at midnight.
-- No exclamation marks. No emojis. No hashtags in slide text.
-- Ellipsis (...) max once per carousel.
-- Second person only ("you").
-- NEVER mention "Maestria" in slides.
-- Never mention the price.
-- If it sounds like ad copy, delete it.
+TEXT OVERLAY RULES:
+- One sentence. No period at the end.
+- Lowercase. No caps except "I".
+- First person. Present tense or recent past.
+- It describes a FEELING or a MOMENT, never the product.
+- It implies the piece was created in response to an emotional state.
+- NEVER use: "AI", "generated", "app", "Maestria", "tool", "create".
+- NEVER use a CTA. No "link in bio". No "try it".
+- The viewer should feel like they're watching someone's private piano moment.
+- Max 15 words. Aim for 8-12.
 
-═══ HOOK UNIQUENESS ═══
-CRITICAL: Every hook (slide 1) in a batch must be RADICALLY different from every other hook. Not just different words — different STRUCTURE, different SCENE, different ENTRY POINT.
+MOOD MAPPING (assign one per video):
+- nocturne: late night, solitude, quiet ache, insomnia, melancholy
+- etude: restless energy, need to move, intensity, focus
+- prelude: calm, morning, stillness, nothing to prove
+- ballade: weight, big feelings, stories, drama, aftermath
+- meditation: emptiness, letting go, space, breath
 
-If one hook starts with "You sit down…", NO other hook in the batch can start with sitting down.
-If one hook mentions "nothing to play", NO other hook can use those words.
+STOCK FOOTAGE SEARCH TERMS:
+- "piano hands dark" / "piano keys close up" / "piano playing night"
+- "piano dramatic lighting" / "piano gentle hands"
+- Always dark/moody. Never bright studio. Never full body. Hands or keys only.
 
-Before generating each carousel, mentally check: "Have I already used this opening scene, this structure, or these key words?" If yes, start over with a completely different angle.
+CAPTION: Minimal. One emoji (🎹) + 3 hashtags max: #piano #pianomusic + one mood-specific tag.
 
-═══ IMAGE DIRECTION PER SLIDE ═══
-Brief description per slide for stock photo selection.
-Categories: piano, hands, room, sheet_music, mood_dark, mood_light
-Keep it moody, dark, intimate. Never bright or cheerful.
+ANTI-REPETITION:
+- Never reuse the same sentence structure in 14 days.
+- Vary the emotional trigger: time of day, weather, event, absence, memory.
+- Alternate between "I" statements and impersonal framings ("some pieces exist because...").
 
-═══ CAPTION ═══
-Max 150 chars. Reinforces the hook without repeating it. Ends with 3-5 hashtags.
+═══════════════════════════════════════
+OUTPUT FORMAT
+═══════════════════════════════════════
 
-═══ OUTPUT FORMAT ═══
 Respond ONLY in valid JSON array. No markdown. No backticks. Each element:
+
+For BROAD carousels:
 {
-  "category": "A" | "B" | "C" | "D" | "E",
-  "slides": ["slide 1", "slide 2", "slide 3", "slide 4", "slide 5", "slide 6"],
-  "image_directions": ["description 1", "description 2", ...],
+  "type": "BROAD",
+  "territory": "recognition" | "identity" | "types" | "moments" | "unspoken" | "habits" | "emotional",
+  "slides": ["slide 1 line 1", "slide 1 line 2 (subline)", "slide 2 line 1", "slide 2 line 2", ...],
+  "image_directions": ["direction for slide 1", "direction for slide 2", ...],
   "caption": "caption text #hashtag1 #hashtag2"
-}`;
+}
+
+For NICHE videos:
+{
+  "type": "NICHE",
+  "mood": "nocturne" | "etude" | "prelude" | "ballade" | "meditation",
+  "text_overlay": "the single overlay line",
+  "stock_search": "search terms for Pexels/Pixabay",
+  "duration_seconds": 8-11,
+  "caption": "🎹 #piano #pianomusic #tag"
+}
+
+═══════════════════════════════════════
+QUALITY GATE
+═══════════════════════════════════════
+
+Before outputting any script, check:
+□ Would this make a pianist stop scrolling and think "that's me"?
+□ Is every slide readable in under 3 seconds?
+□ Does the BROAD hook pass the 17-year-old AND 45-year-old test?
+□ Is there ZERO product mention in BROAD content?
+□ Is the NICHE overlay under 15 words?
+□ Has this exact angle/hook been used in the last 14 days? If yes, kill it.`;
 
 // ── Fetch last batch performance ─────────────────────────────────────────────
 
 async function getPerformanceContext(): Promise<string> {
-  // Get the last 2 batches worth of pieces with performance data
   const { data: pieces } = await supabase
     .from('content_pieces')
-    .select('slide_texts, tiktok_views, tiktok_likes, tiktok_profile_views, tiktok_site_clicks, engagement_score, conversion_score')
+    .select('slide_texts, content_type, tiktok_views, tiktok_likes, tiktok_comments, tiktok_shares, tiktok_profile_views, tiktok_site_clicks, engagement_score, conversion_score')
     .not('tiktok_views', 'is', null)
     .order('created_at', { ascending: false })
-    .limit(20);
+    .limit(30);
 
   if (!pieces || pieces.length === 0) {
-    return 'No performance data yet. This is the first batch. Use the pain points that are marked as high-converting in the system prompt.';
+    return 'No performance data yet. This is the first batch with the new two-line strategy. Generate a balanced mix of BROAD identity carousels and NICHE conversion video scripts.';
   }
 
-  // Sort by conversion score (profile views / views = what actually drives business)
-  const sorted = [...pieces].sort((a, b) => (b.conversion_score || 0) - (a.conversion_score || 0));
-  
-  const top = sorted.slice(0, 5);
-  const bottom = sorted.slice(-5);
+  // Separate BROAD and NICHE performance
+  const broad = pieces.filter(p => p.content_type === 'BROAD' || !p.content_type);
+  const niche = pieces.filter(p => p.content_type === 'NICHE');
+
+  const sortByConversion = (arr: typeof pieces) =>
+    [...arr].sort((a, b) => (b.conversion_score || 0) - (a.conversion_score || 0));
 
   let ctx = 'PERFORMANCE DATA FROM PREVIOUS BATCHES:\n\n';
-  
-  ctx += '── TOP PERFORMERS (highest profile visit rate) ──\n';
-  top.forEach((p, i) => {
-    const slides = Array.isArray(p.slide_texts) ? p.slide_texts : [];
-    ctx += `${i + 1}. Hook: "${slides[0] || 'N/A'}" | Views: ${p.tiktok_views} | Likes: ${p.tiktok_likes} | Profile visits: ${p.tiktok_profile_views} | Site clicks: ${p.tiktok_site_clicks} | Conversion: ${((p.conversion_score || 0) * 100).toFixed(1)}%\n`;
-  });
-  
-  ctx += '\n── LOWEST PERFORMERS ──\n';
-  bottom.forEach((p, i) => {
-    const slides = Array.isArray(p.slide_texts) ? p.slide_texts : [];
-    ctx += `${i + 1}. Hook: "${slides[0] || 'N/A'}" | Views: ${p.tiktok_views} | Profile visits: ${p.tiktok_profile_views} | Conversion: ${((p.conversion_score || 0) * 100).toFixed(1)}%\n`;
-  });
 
-  ctx += '\nINSTRUCTION: Generate new scripts that follow the PATTERNS of top performers (pain specificity, physical actions at the piano, directness) and AVOID the patterns of low performers. Do NOT repeat hooks — create new angles on the same core pains.';
+  if (broad.length > 0) {
+    const sortedBroad = sortByConversion(broad);
+    ctx += '── BROAD CAROUSEL PERFORMANCE ──\n';
+    ctx += 'Top:\n';
+    sortedBroad.slice(0, 3).forEach((p, i) => {
+      const slides = Array.isArray(p.slide_texts) ? p.slide_texts : [];
+      ctx += `${i + 1}. Hook: "${slides[0] || 'N/A'}" | Views: ${p.tiktok_views} | Likes: ${p.tiktok_likes} | Comments: ${p.tiktok_comments || 0} | Shares: ${p.tiktok_shares || 0} | Profile visits: ${p.tiktok_profile_views}\n`;
+    });
+    ctx += 'Bottom:\n';
+    sortedBroad.slice(-3).forEach((p, i) => {
+      const slides = Array.isArray(p.slide_texts) ? p.slide_texts : [];
+      ctx += `${i + 1}. Hook: "${slides[0] || 'N/A'}" | Views: ${p.tiktok_views}\n`;
+    });
+  }
+
+  if (niche.length > 0) {
+    ctx += '\n── NICHE VIDEO PERFORMANCE ──\n';
+    niche.forEach((p, i) => {
+      ctx += `${i + 1}. Overlay: "${Array.isArray(p.slide_texts) ? p.slide_texts[0] : 'N/A'}" | Views: ${p.tiktok_views} | Comments: ${p.tiktok_comments || 0}\n`;
+    });
+  }
+
+  ctx += '\nINSTRUCTION: For BROAD, follow patterns of top performers (identity specificity, emotional sublines). For NICHE, prioritize moods that generated comments (people asking about the piece). Do NOT repeat any hooks or overlays.';
 
   return ctx;
+}
+
+// ── Get recently used hooks to prevent repetition ────────────────────────────
+
+async function getRecentHooks(): Promise<string[]> {
+  const { data } = await supabase
+    .from('content_pieces')
+    .select('slide_texts')
+    .order('created_at', { ascending: false })
+    .limit(42); // last 2 weeks worth
+
+  if (!data) return [];
+  return data
+    .map(p => (Array.isArray(p.slide_texts) ? p.slide_texts[0] : ''))
+    .filter(Boolean);
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  if (req.method !== 'POST') {
+  // Allow GET for cron triggers (Vercel crons send GET)
+  if (req.method !== 'POST' && req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // Simple auth for cron/external triggers
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && req.method === 'GET') {
+    const auth = req.headers.authorization;
+    if (auth !== `Bearer ${cronSecret}`) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
+
   try {
-    const batchSize = req.body?.batch_size || 21;
+    // Default: 14 BROAD + 7 NICHE = 21 per week
+    const broadCount = (req.body?.broad_count) || 14;
+    const nicheCount = (req.body?.niche_count) || 7;
+    const totalCount = broadCount + nicheCount;
+
     const performanceContext = await getPerformanceContext();
+    const recentHooks = await getRecentHooks();
 
     // Get current week number
     const now = new Date();
@@ -193,8 +259,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from('content_batches')
       .insert({
         week_number: weekNumber,
-        batch_size: batchSize,
-        system_prompt_version: 'v1',
+        batch_size: totalCount,
+        system_prompt_version: 'v2.0',
         performance_context: { raw: performanceContext },
         system_prompt_used: SYSTEM_PROMPT,
       })
@@ -205,21 +271,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ error: 'Failed to create batch', detail: batchErr });
     }
 
-    // Generate in chunks of 7 to stay within token limits
-    const CHUNK_SIZE = 7;
-    let allCarousels: any[] = [];
+    // ── Generate BROAD carousels ──
+    let allContent: any[] = [];
 
-    for (let chunk = 0; chunk < Math.ceil(batchSize / CHUNK_SIZE); chunk++) {
-      const remaining = batchSize - allCarousels.length;
+    // Generate BROAD in chunks of 7
+    const CHUNK_SIZE = 7;
+    for (let chunk = 0; chunk < Math.ceil(broadCount / CHUNK_SIZE); chunk++) {
+      const remaining = broadCount - allContent.filter(c => c.type === 'BROAD').length;
       const thisChunk = Math.min(CHUNK_SIZE, remaining);
-      
+
+      const existingHooks = [
+        ...recentHooks,
+        ...allContent.map(c => c.slides?.[0] || c.text_overlay || ''),
+      ].filter(Boolean);
+
       const message = await anthropic.messages.create({
         model: 'claude-sonnet-4-6',
         max_tokens: 4000,
         system: SYSTEM_PROMPT,
         messages: [{
           role: 'user',
-          content: `Generate ${thisChunk} carousel scripts for this week (batch ${chunk + 1} of ${Math.ceil(batchSize / CHUNK_SIZE)}).\n\n${performanceContext}\n\n${allCarousels.length > 0 ? `ALREADY GENERATED HOOKS (do NOT repeat these):\n${allCarousels.map(c => `- "${c.slides?.[0]}"`).join('\n')}\n\n` : ''}Respond ONLY in valid JSON array. No markdown, no backticks.`,
+          content: `Generate ${thisChunk} BROAD identity carousel scripts.\n\n${performanceContext}\n\nRECENT HOOKS (do NOT repeat or closely mirror these):\n${existingHooks.map(h => `- "${h}"`).join('\n')}\n\nRespond ONLY in valid JSON array. No markdown, no backticks. Each element must have "type": "BROAD".`,
         }],
       });
 
@@ -230,72 +302,124 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       try {
         const parsed = JSON.parse(rawText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-        allCarousels = allCarousels.concat(parsed);
+        allContent = allContent.concat(parsed);
       } catch {
-        console.error(`[generate-batch] Failed to parse chunk ${chunk + 1}:`, rawText.slice(0, 300));
-        // Continue with what we have
+        console.error(`[generate-batch] Failed to parse BROAD chunk ${chunk + 1}:`, rawText.slice(0, 300));
       }
     }
 
-    const carousels = allCarousels.slice(0, batchSize);
+    // ── Generate NICHE video scripts ──
+    const nicheMessage = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2000,
+      system: SYSTEM_PROMPT,
+      messages: [{
+        role: 'user',
+        content: `Generate ${nicheCount} NICHE video scripts.\n\n${performanceContext}\n\nRECENT OVERLAYS (do NOT repeat):\n${recentHooks.slice(0, 14).map(h => `- "${h}"`).join('\n')}\n\nRespond ONLY in valid JSON array. No markdown, no backticks. Each element must have "type": "NICHE".`,
+      }],
+    });
 
-    // Store each piece with auto-scheduling
-    // 3 posts per day, at 13:00, 18:00, 23:00 UTC
-    // = 10h, 15h, 20h Guyane = 9AM, 2PM, 7PM US Eastern
-    const POST_HOURS_UTC = [13, 18, 23];
-    const pieces = [];
+    const nicheRaw = nicheMessage.content
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('');
 
-    // Start scheduling from tomorrow
+    try {
+      const nicheParsed = JSON.parse(nicheRaw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+      allContent = allContent.concat(nicheParsed);
+    } catch {
+      console.error('[generate-batch] Failed to parse NICHE:', nicheRaw.slice(0, 300));
+    }
+
+    // ── Schedule pieces ──
+    // Daily pattern: 10h Cayenne (13 UTC) = BROAD, 15h (18 UTC) = NICHE, 20h (23 UTC) = BROAD
+    const POST_SLOTS = [
+      { hour: 13, type: 'BROAD' },
+      { hour: 18, type: 'NICHE' },
+      { hour: 23, type: 'BROAD' },
+    ];
+
+    const broadPieces = allContent.filter(c => c.type === 'BROAD').slice(0, broadCount);
+    const nichePieces = allContent.filter(c => c.type === 'NICHE').slice(0, nicheCount);
+
+    // Interleave: for each day, pick 2 BROAD + 1 NICHE
+    const scheduled: any[] = [];
+    let broadIdx = 0;
+    let nicheIdx = 0;
+
     const startDate = new Date();
     startDate.setUTCDate(startDate.getUTCDate() + 1);
     startDate.setUTCHours(0, 0, 0, 0);
 
-    for (let i = 0; i < carousels.length; i++) {
-      const c = carousels[i];
-      
-      // Calculate scheduled time: piece i → day floor(i/3), slot i%3
-      const dayOffset = Math.floor(i / POST_HOURS_UTC.length);
-      const slotIndex = i % POST_HOURS_UTC.length;
-      const scheduledFor = new Date(startDate);
-      scheduledFor.setUTCDate(scheduledFor.getUTCDate() + dayOffset);
-      scheduledFor.setUTCHours(POST_HOURS_UTC[slotIndex], 0, 0, 0);
+    const totalDays = Math.ceil(Math.max(broadCount / 2, nicheCount));
 
-      // Extract hashtags from caption
-      const hashtagMatch = (c.caption || '').match(/#\w+/g);
-      const captionClean = (c.caption || '').replace(/#\w+/g, '').trim();
+    for (let day = 0; day < totalDays; day++) {
+      for (const slot of POST_SLOTS) {
+        let piece;
+        if (slot.type === 'BROAD' && broadIdx < broadPieces.length) {
+          piece = broadPieces[broadIdx++];
+        } else if (slot.type === 'NICHE' && nicheIdx < nichePieces.length) {
+          piece = nichePieces[nicheIdx++];
+        } else {
+          continue;
+        }
 
-      const { data: piece, error: pieceErr } = await supabase
-        .from('content_pieces')
-        .insert({
+        const scheduledFor = new Date(startDate);
+        scheduledFor.setUTCDate(scheduledFor.getUTCDate() + day);
+        scheduledFor.setUTCHours(slot.hour, 0, 0, 0);
+
+        // Extract hashtags from caption
+        const hashtagMatch = (piece.caption || '').match(/#\w+/g);
+        const captionClean = (piece.caption || '').replace(/#\w+/g, '').trim();
+
+        const insertData: any = {
           batch_id: batch.id,
-          piece_index: i,
-          slide_texts: c.slides || [],
+          piece_index: scheduled.length,
+          content_type: piece.type,
+          slide_texts: piece.type === 'BROAD'
+            ? (piece.slides || [])
+            : [piece.text_overlay || ''],
           caption: captionClean,
           hashtags: hashtagMatch || [],
-          image_mode: 'alternate',
-          image_prompts: (c.image_directions || []).map((dir: string, idx: number) => ({
-            slide_index: idx,
-            direction: dir,
-            mode: idx % 2 === 0 ? 'stock' : 'ai',
-          })),
           status: 'generated',
           scheduled_for: scheduledFor.toISOString(),
-        })
-        .select('id, piece_index, slide_texts, caption, scheduled_for')
-        .single();
+        };
 
-      if (piece) pieces.push(piece);
+        // BROAD-specific fields
+        if (piece.type === 'BROAD') {
+          insertData.territory = piece.territory || null;
+          insertData.image_directions = piece.image_directions || [];
+        }
+
+        // NICHE-specific fields
+        if (piece.type === 'NICHE') {
+          insertData.mood = piece.mood || null;
+          insertData.stock_search = piece.stock_search || null;
+          insertData.duration_seconds = piece.duration_seconds || 9;
+        }
+
+        const { data: saved, error: pieceErr } = await supabase
+          .from('content_pieces')
+          .insert(insertData)
+          .select('id, piece_index, content_type, slide_texts, caption, scheduled_for')
+          .single();
+
+        if (saved) scheduled.push(saved);
+      }
     }
 
     return res.status(200).json({
       ok: true,
       batch_id: batch.id,
-      pieces_generated: pieces.length,
-      pieces: pieces.map(p => ({
+      broad_generated: broadPieces.length,
+      niche_generated: nichePieces.length,
+      total_scheduled: scheduled.length,
+      pieces: scheduled.map(p => ({
         id: p.id,
         index: p.piece_index,
+        type: p.content_type,
         hook: Array.isArray(p.slide_texts) ? p.slide_texts[0] : 'N/A',
-        caption: p.caption,
+        scheduled: p.scheduled_for,
       })),
     });
 
